@@ -5,10 +5,12 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import com.example.inv2.model.InvoiceEntity
+import com.example.inv2.model.ScanEntity
 
-@Database(entities = [InvoiceEntity::class], version = 1)
+@Database(entities = [InvoiceEntity::class, ScanEntity::class], version = 1)
 abstract class InvoiceDatabase : RoomDatabase() {
     abstract fun invoiceDao(): InvoiceDao
+    abstract fun scanDao(): ScanDao
 
     companion object {
         @Volatile

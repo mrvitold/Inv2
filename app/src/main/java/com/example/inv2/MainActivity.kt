@@ -56,10 +56,13 @@ import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import com.example.inv2.model.ScanEntry
+import com.example.inv2.model.ScanEntity
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.inv2.viewmodel.ScanViewModel
+import androidx.compose.runtime.collectAsState
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -142,16 +145,22 @@ fun loadBitmapWithCorrectOrientation(context: android.content.Context, uri: Uri)
 @Composable
 fun MainScreen() {
     val context = LocalContext.current
-    val scanList = remember { mutableStateListOf<ScanEntry>() }
+    val viewModel: ScanViewModel = viewModel()
+    val scanList = viewModel.scans.collectAsState().value
     val showGallery = remember { mutableStateOf(false) }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris: List<Uri> ->
-        // For each selected image, add to scanList
         uris.forEach { uri ->
             val bitmap = loadBitmapWithCorrectOrientation(context, uri)
             if (bitmap != null) {
                 val hash = bitmapHash(bitmap)
                 val date = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-                scanList.add(ScanEntry(uri.toString(), date, hash))
+                // Use ScanEntity for Room
+                viewModel.addScan(com.example.inv2.model.ScanEntity(
+                    id = 0, // Ensure id is 0 for new scans
+                    uri = uri.toString(),
+                    uploadDate = date,
+                    hash = hash
+                ))
             }
         }
     }
@@ -193,7 +202,7 @@ fun bitmapHash(bitmap: Bitmap): String {
 
 // Updated PhotoPickerScreen to accept onBack and onScanAdded
 @Composable
-fun PhotoPickerScreen(onBack: () -> Unit, onScanAdded: (ScanEntry) -> Unit) {
+fun PhotoPickerScreen(onBack: () -> Unit, onScanAdded: (ScanEntity) -> Unit) {
     val context = LocalContext.current
     val imageUris = remember { mutableStateOf<List<Uri>>(emptyList()) }
     val ocrResults = remember { mutableStateOf<Map<Uri, String>>(emptyMap()) }
@@ -236,7 +245,7 @@ fun PhotoPickerScreen(onBack: () -> Unit, onScanAdded: (ScanEntry) -> Unit) {
                 // Add scan entry for gallery
                 val hash = bitmapHash(bitmap)
                 val date = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-                onScanAdded(ScanEntry(uri.toString(), date, hash))
+                onScanAdded(ScanEntity(id = 0, uri = uri.toString(), uploadDate = date, hash = hash))
             } else {
                 results[uri] = "Could not load image."
                 status[uri] = "Could not load image."
@@ -342,7 +351,7 @@ fun PhotoPickerScreen(onBack: () -> Unit, onScanAdded: (ScanEntry) -> Unit) {
 
 // Scans gallery screen with Back button at top left
 @Composable
-fun ScansGalleryScreen(scanList: List<ScanEntry>, onBack: () -> Unit) {
+fun ScansGalleryScreen(scanList: List<ScanEntity>, onBack: () -> Unit) {
     val duplicates = scanList.groupBy { it.hash }.filter { it.value.size > 1 }.flatMap { it.value.map { entry -> entry.uri } }.toSet()
     Box(modifier = Modifier.fillMaxSize()) {
         Column(

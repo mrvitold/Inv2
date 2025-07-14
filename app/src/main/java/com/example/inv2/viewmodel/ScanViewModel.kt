@@ -11,6 +11,8 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import android.content.Context
+import kotlinx.coroutines.delay
 
 class ScanViewModel(app: Application) : AndroidViewModel(app) {
     private val scanDao = InvoiceDatabase.getInstance(app).scanDao()
@@ -42,6 +44,30 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     fun deleteScansByIds(ids: List<Int>) {
         viewModelScope.launch {
             scanDao.deleteByIds(ids)
+        }
+    }
+
+    fun updateUploadStatus(id: Int, status: String) {
+        viewModelScope.launch {
+            scanDao.updateUploadStatus(id, status)
+        }
+    }
+
+    fun uploadPendingScans(context: Context) {
+        viewModelScope.launch {
+            scanDao.resetUploadingToPending()
+            scanDao.resetFailedToPending()
+            val pendingScans = scanDao.getPendingScans()
+            for (scan in pendingScans) {
+                updateUploadStatus(scan.id, "uploading")
+                try {
+                    // TODO: Replace with your real upload logic
+                    delay(1000) // Simulate upload
+                    updateUploadStatus(scan.id, "uploaded")
+                } catch (e: Exception) {
+                    updateUploadStatus(scan.id, "failed")
+                }
+            }
         }
     }
 } 

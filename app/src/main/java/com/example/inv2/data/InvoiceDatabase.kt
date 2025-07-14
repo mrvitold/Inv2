@@ -6,8 +6,10 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import com.example.inv2.model.InvoiceEntity
 import com.example.inv2.model.ScanEntity
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 
-@Database(entities = [InvoiceEntity::class, ScanEntity::class], version = 1)
+@Database(entities = [InvoiceEntity::class, ScanEntity::class], version = 2)
 abstract class InvoiceDatabase : RoomDatabase() {
     abstract fun invoiceDao(): InvoiceDao
     abstract fun scanDao(): ScanDao
@@ -22,9 +24,19 @@ abstract class InvoiceDatabase : RoomDatabase() {
                     context.applicationContext,
                     InvoiceDatabase::class.java,
                     "invoice_database"
-                ).build()
+                )
+                // Add migration from 1 to 2
+                .addMigrations(MIGRATION_1_2)
+                .build()
                 INSTANCE = instance
                 instance
+            }
+        }
+
+        // Migration from version 1 to 2: add uploadStatus column to scans
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE scans ADD COLUMN uploadStatus TEXT NOT NULL DEFAULT 'pending'")
             }
         }
     }

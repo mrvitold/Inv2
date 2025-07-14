@@ -17,4 +17,16 @@ interface ScanDao {
 
     @Query("DELETE FROM scans WHERE id IN (:ids)")
     suspend fun deleteByIds(ids: List<Int>)
+
+    @Query("UPDATE scans SET uploadStatus = :status WHERE id = :id")
+    suspend fun updateUploadStatus(id: Int, status: String)
+
+    @Query("SELECT * FROM scans WHERE uploadStatus = 'pending'")
+    suspend fun getPendingScans(): List<ScanEntity>
+
+    @Query("UPDATE scans SET uploadStatus = 'pending' WHERE uploadStatus = 'uploading'")
+    suspend fun resetUploadingToPending()
+
+    @Query("UPDATE scans SET uploadStatus = 'pending' WHERE uploadStatus = 'failed'")
+    suspend fun resetFailedToPending()
 } 

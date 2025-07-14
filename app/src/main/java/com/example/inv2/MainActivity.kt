@@ -175,6 +175,11 @@ fun MainScreen() {
     val uploadTotal = remember { mutableStateOf(0) }
     val pendingUris = remember { mutableStateOf<List<Uri>>(emptyList()) }
 
+    // Automatically upload pending scans on app start
+    LaunchedEffect(Unit) {
+        viewModel.uploadPendingScans(context)
+    }
+
     // Launch upload coroutine when pendingUris is set
     LaunchedEffect(pendingUris.value) {
         if (pendingUris.value.isNotEmpty()) {
@@ -182,6 +187,7 @@ fun MainScreen() {
             uploadProgress.value = 0
             uploadTotal.value = pendingUris.value.size
             for ((idx, uri) in pendingUris.value.withIndex()) {
+                var scanId: Int? = null
                 withContext(Dispatchers.IO) {
                     try {
                         context.contentResolver.takePersistableUriPermission(
@@ -195,12 +201,28 @@ fun MainScreen() {
                     if (bitmap != null) {
                         val hash = bitmapHash(bitmap)
                         val date = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-                        viewModel.addScan(com.example.inv2.model.ScanEntity(
+                        // Insert scan with status 'uploading'
+                        val scan = com.example.inv2.model.ScanEntity(
                             id = 0,
                             uri = uri.toString(),
                             uploadDate = date,
-                            hash = hash
-                        ))
+                            hash = hash,
+                            uploadStatus = "uploading"
+                        )
+                        viewModel.addScan(scan)
+                        // Wait for scan to be inserted and get its id
+                        // (Assume id is auto-incremented and latest scan is the one just added)
+                        val latestScan = viewModel.scans.value.firstOrNull { it.uri == scan.uri && it.hash == scan.hash }
+                        scanId = latestScan?.id
+                        // Simulate upload (replace with real upload logic)
+                        val uploadSuccess = true // TODO: Replace with actual upload result
+                        if (scanId != null) {
+                            if (uploadSuccess) {
+                                viewModel.updateUploadStatus(scanId!!, "uploaded")
+                            } else {
+                                viewModel.updateUploadStatus(scanId!!, "failed")
+                            }
+                        }
                     }
                 }
                 uploadProgress.value = idx + 1
@@ -322,7 +344,7 @@ fun PhotoPickerScreen(onBack: () -> Unit, onScanAdded: (ScanEntity) -> Unit) {
                 // Add scan entry for gallery
                 val hash = bitmapHash(bitmap)
                 val date = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-                onScanAdded(ScanEntity(id = 0, uri = uri.toString(), uploadDate = date, hash = hash))
+                onScanAdded(ScanEntity(id = 0, uri = uri.toString(), uploadDate = date, hash = hash, uploadStatus = "pending"))
             } else {
                 results[uri] = "Could not load image."
                 status[uri] = "Could not load image."
@@ -551,6 +573,7 @@ fun ScansGalleryScreen(scanList: List<ScanEntity>, isLoading: Boolean, onBack: (
                                             .clickable { if (bitmap != null) viewingScan.value = entry }
                                     ) {
                                         Text("Uploaded: ${entry.uploadDate}", style = MaterialTheme.typography.bodySmall)
+                                        Text("Status: ${entry.uploadStatus}", style = MaterialTheme.typography.bodySmall)
                                         if (entry.uri in duplicates) {
                                             Text("duplicated", color = Color.Red, style = MaterialTheme.typography.bodySmall)
                                         }

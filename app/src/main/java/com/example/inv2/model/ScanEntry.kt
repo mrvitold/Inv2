@@ -13,5 +13,6 @@ data class ScanEntity(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     val uri: String,
     val uploadDate: String,
-    val hash: String
+    val hash: String,
+    val uploadStatus: String = "pending"
 ) 

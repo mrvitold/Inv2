@@ -41,6 +41,8 @@ import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.google.android.gms.tasks.Task
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
@@ -63,6 +65,17 @@ import androidx.compose.foundation.lazy.items
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.inv2.viewmodel.ScanViewModel
 import androidx.compose.runtime.collectAsState
+import android.content.Intent
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.CircularProgressIndicator
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -148,20 +161,49 @@ fun MainScreen() {
     val viewModel: ScanViewModel = viewModel()
     val scanList = viewModel.scans.collectAsState().value
     val showGallery = remember { mutableStateOf(false) }
-    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris: List<Uri> ->
-        uris.forEach { uri ->
-            val bitmap = loadBitmapWithCorrectOrientation(context, uri)
-            if (bitmap != null) {
-                val hash = bitmapHash(bitmap)
-                val date = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-                // Use ScanEntity for Room
-                viewModel.addScan(com.example.inv2.model.ScanEntity(
-                    id = 0, // Ensure id is 0 for new scans
-                    uri = uri.toString(),
-                    uploadDate = date,
-                    hash = hash
-                ))
+    val isUploading = remember { mutableStateOf(false) }
+    val uploadProgress = remember { mutableStateOf(0) }
+    val uploadTotal = remember { mutableStateOf(0) }
+    val pendingUris = remember { mutableStateOf<List<Uri>>(emptyList()) }
+
+    // Launch upload coroutine when pendingUris is set
+    LaunchedEffect(pendingUris.value) {
+        if (pendingUris.value.isNotEmpty()) {
+            isUploading.value = true
+            uploadProgress.value = 0
+            uploadTotal.value = pendingUris.value.size
+            for ((idx, uri) in pendingUris.value.withIndex()) {
+                withContext(Dispatchers.IO) {
+                    try {
+                        context.contentResolver.takePersistableUriPermission(
+                            uri,
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        )
+                    } catch (_: Exception) {}
+                    val bitmap = try {
+                        loadBitmapWithCorrectOrientation(context, uri)
+                    } catch (_: Exception) { null }
+                    if (bitmap != null) {
+                        val hash = bitmapHash(bitmap)
+                        val date = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+                        viewModel.addScan(com.example.inv2.model.ScanEntity(
+                            id = 0,
+                            uri = uri.toString(),
+                            uploadDate = date,
+                            hash = hash
+                        ))
+                    }
+                }
+                uploadProgress.value = idx + 1
             }
+            isUploading.value = false
+            pendingUris.value = emptyList()
+        }
+    }
+
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris: List<Uri> ->
+        if (uris.isNotEmpty()) {
+            pendingUris.value = uris
         }
     }
 
@@ -175,15 +217,22 @@ fun MainScreen() {
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Button(onClick = {
-                launcher.launch("image/*")
-            }) {
+            if (isUploading.value) {
+                CircularProgressIndicator()
+                Spacer(modifier = Modifier.height(16.dp))
+                Text("Uploading ${uploadProgress.value} of ${uploadTotal.value} scans...")
+            }
+            Button(
+                onClick = { launcher.launch("image/*") },
+                enabled = !isUploading.value
+            ) {
                 Text("Add Invoice Photos")
             }
             Spacer(modifier = Modifier.height(16.dp))
-            Button(onClick = {
-                showGallery.value = true
-            }) {
+            Button(
+                onClick = { showGallery.value = true },
+                enabled = !isUploading.value
+            ) {
                 Text("Scans")
             }
         }
@@ -208,6 +257,19 @@ fun PhotoPickerScreen(onBack: () -> Unit, onScanAdded: (ScanEntity) -> Unit) {
     val ocrResults = remember { mutableStateOf<Map<Uri, String>>(emptyMap()) }
     val saveStatus = remember { mutableStateOf<Map<Uri, String>>(emptyMap()) }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris: List<Uri> ->
+        uris.forEach { uri ->
+            // Persist URI permission for later access
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (e: SecurityException) {
+                // Ignore if already granted or not needed
+            } catch (e: Exception) {
+                // Log or handle other exceptions if needed
+            }
+        }
         imageUris.value = uris
     }
     val db = remember { InvoiceDatabase.getInstance(context) }
@@ -218,7 +280,13 @@ fun PhotoPickerScreen(onBack: () -> Unit, onScanAdded: (ScanEntity) -> Unit) {
         val results = mutableMapOf<Uri, String>()
         val status = mutableMapOf<Uri, String>()
         for (uri in imageUris.value) {
-            val bitmap = loadBitmapWithCorrectOrientation(context, uri)
+            val bitmap = try {
+                loadBitmapWithCorrectOrientation(context, uri)
+            } catch (e: SecurityException) {
+                null // Could not access image
+            } catch (e: Exception) {
+                null // Other errors
+            }
             if (bitmap != null) {
                 val image = InputImage.fromBitmap(bitmap, 0)
                 val result = recognizer.process(image).await()
@@ -282,7 +350,13 @@ fun PhotoPickerScreen(onBack: () -> Unit, onScanAdded: (ScanEntity) -> Unit) {
                 imageUris.value.forEach { uri ->
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         val bitmap = remember(uri) {
-                            loadBitmapWithCorrectOrientation(context, uri)
+                            try {
+                                loadBitmapWithCorrectOrientation(context, uri)
+                            } catch (e: SecurityException) {
+                                null
+                            } catch (e: Exception) {
+                                null
+                            }
                         }
                         bitmap?.let {
                             Image(
@@ -352,7 +426,11 @@ fun PhotoPickerScreen(onBack: () -> Unit, onScanAdded: (ScanEntity) -> Unit) {
 // Scans gallery screen with Back button at top left
 @Composable
 fun ScansGalleryScreen(scanList: List<ScanEntity>, onBack: () -> Unit) {
+    val viewModel: ScanViewModel = viewModel()
     val duplicates = scanList.groupBy { it.hash }.filter { it.value.size > 1 }.flatMap { it.value.map { entry -> entry.uri } }.toSet()
+    val selectedIds = remember { mutableStateOf(setOf<Int>()) }
+    val showDeleteDialog = remember { mutableStateOf(false) }
+
     Box(modifier = Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
@@ -361,7 +439,7 @@ fun ScansGalleryScreen(scanList: List<ScanEntity>, onBack: () -> Unit) {
             verticalArrangement = Arrangement.Top,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Top bar with Back button at left and title centered
+            // Top bar with Back button at left, title centered, delete at right
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
@@ -378,6 +456,11 @@ fun ScansGalleryScreen(scanList: List<ScanEntity>, onBack: () -> Unit) {
                     style = MaterialTheme.typography.titleLarge,
                     modifier = Modifier.weight(1f)
                 )
+                if (selectedIds.value.isNotEmpty()) {
+                    IconButton(onClick = { showDeleteDialog.value = true }) {
+                        Icon(Icons.Default.Delete, contentDescription = "Delete Selected")
+                    }
+                }
             }
             Spacer(modifier = Modifier.height(16.dp))
             if (scanList.isEmpty()) {
@@ -385,25 +468,50 @@ fun ScansGalleryScreen(scanList: List<ScanEntity>, onBack: () -> Unit) {
             } else {
                 LazyColumn {
                     items(scanList) { entry ->
+                        val isSelected = selectedIds.value.contains(entry.id)
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(vertical = 8.dp)
+                                .clickable {
+                                    selectedIds.value = if (isSelected) selectedIds.value - entry.id else selectedIds.value + entry.id
+                                }
                         ) {
+                            Checkbox(
+                                checked = isSelected,
+                                onCheckedChange = { checked ->
+                                    selectedIds.value = if (checked) selectedIds.value + entry.id else selectedIds.value - entry.id
+                                }
+                            )
                             val uri = Uri.parse(entry.uri)
                             val context = LocalContext.current
-                            val bitmap = remember(uri) { loadBitmapWithCorrectOrientation(context, uri) }
-                            bitmap?.let {
-                                Image(
-                                    bitmap = it.asImageBitmap(),
-                                    contentDescription = "Scan thumbnail",
-                                    modifier = Modifier
-                                        .size(64.dp)
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(Color.LightGray),
-                                    contentScale = ContentScale.Crop
-                                )
+                            val bitmap = remember(uri) {
+                                try {
+                                    loadBitmapWithCorrectOrientation(context, uri)
+                                } catch (e: SecurityException) {
+                                    null
+                                } catch (e: Exception) {
+                                    null
+                                }
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .size(64.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color.LightGray),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (bitmap != null) {
+                                    Image(
+                                        bitmap = bitmap.asImageBitmap(),
+                                        contentDescription = "Scan thumbnail",
+                                        modifier = Modifier.matchParentSize(),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                } else {
+                                    Text("?", color = Color.Red)
+                                }
                             }
                             Spacer(modifier = Modifier.width(16.dp))
                             Column(modifier = Modifier.weight(1f)) {
@@ -416,6 +524,27 @@ fun ScansGalleryScreen(scanList: List<ScanEntity>, onBack: () -> Unit) {
                     }
                 }
             }
+        }
+        if (showDeleteDialog.value) {
+            AlertDialog(
+                onDismissRequest = { showDeleteDialog.value = false },
+                title = { Text("Delete selected scans?") },
+                text = { Text("Are you sure you want to delete the selected scans? This cannot be undone.") },
+                confirmButton = {
+                    Button(onClick = {
+                        viewModel.deleteScansByIds(selectedIds.value.toList())
+                        selectedIds.value = emptySet()
+                        showDeleteDialog.value = false
+                    }) {
+                        Text("Delete")
+                    }
+                },
+                dismissButton = {
+                    Button(onClick = { showDeleteDialog.value = false }) {
+                        Text("Cancel")
+                    }
+                }
+            )
         }
     }
 }

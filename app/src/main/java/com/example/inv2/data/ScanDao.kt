@@ -14,4 +14,7 @@ interface ScanDao {
 
     @Query("SELECT * FROM scans ORDER BY id DESC")
     fun getAll(): Flow<List<ScanEntity>>
+
+    @Query("DELETE FROM scans WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<Int>)
 } 

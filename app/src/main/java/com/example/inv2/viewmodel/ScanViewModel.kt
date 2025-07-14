@@ -23,4 +23,10 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
             scanDao.insert(scan)
         }
     }
+
+    fun deleteScansByIds(ids: List<Int>) {
+        viewModelScope.launch {
+            scanDao.deleteByIds(ids)
+        }
+    }
 } 

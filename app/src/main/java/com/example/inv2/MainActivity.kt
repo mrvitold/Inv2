@@ -76,6 +76,14 @@ import androidx.compose.foundation.border
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.transformable
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.material.icons.filled.Collections
+import androidx.compose.foundation.layout.navigationBarsPadding
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -160,6 +168,7 @@ fun MainScreen() {
     val context = LocalContext.current
     val viewModel: ScanViewModel = viewModel()
     val scanList = viewModel.scans.collectAsState().value
+    val isLoading = viewModel.isLoading.collectAsState().value
     val showGallery = remember { mutableStateOf(false) }
     val isUploading = remember { mutableStateOf(false) }
     val uploadProgress = remember { mutableStateOf(0) }
@@ -208,7 +217,7 @@ fun MainScreen() {
     }
 
     if (showGallery.value) {
-        ScansGalleryScreen(scanList = scanList, onBack = { showGallery.value = false })
+        ScansGalleryScreen(scanList = scanList, isLoading = isLoading, onBack = { showGallery.value = false })
     } else {
         Column(
             modifier = Modifier
@@ -425,128 +434,244 @@ fun PhotoPickerScreen(onBack: () -> Unit, onScanAdded: (ScanEntity) -> Unit) {
 
 // Scans gallery screen with Back button at top left
 @Composable
-fun ScansGalleryScreen(scanList: List<ScanEntity>, onBack: () -> Unit) {
+fun ScansGalleryScreen(scanList: List<ScanEntity>, isLoading: Boolean, onBack: () -> Unit) {
     val viewModel: ScanViewModel = viewModel()
     val duplicates = scanList.groupBy { it.hash }.filter { it.value.size > 1 }.flatMap { it.value.map { entry -> entry.uri } }.toSet()
     val selectedIds = remember { mutableStateOf(setOf<Int>()) }
     val showDeleteDialog = remember { mutableStateOf(false) }
+    val viewingScan = remember { mutableStateOf<ScanEntity?>(null) }
+    val showDeleteDuplicatesDialog = remember { mutableStateOf(false) }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(top = 24.dp, start = 16.dp, end = 16.dp),
-            verticalArrangement = Arrangement.Top,
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            // Top bar with Back button at left, title centered, delete at right
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Button(
-                    onClick = onBack,
-                    modifier = Modifier.height(36.dp)
-                ) {
-                    Text("Back")
-                }
-                Spacer(modifier = Modifier.width(16.dp))
-                Text(
-                    "Scans Gallery",
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.weight(1f)
-                )
-                if (selectedIds.value.isNotEmpty()) {
-                    IconButton(onClick = { showDeleteDialog.value = true }) {
-                        Icon(Icons.Default.Delete, contentDescription = "Delete Selected")
-                    }
-                }
+        if (isLoading) {
+            // Centered loading spinner
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
             }
-            Spacer(modifier = Modifier.height(16.dp))
-            if (scanList.isEmpty()) {
-                Text("No scans yet.")
-            } else {
-                LazyColumn {
-                    items(scanList) { entry ->
-                        val isSelected = selectedIds.value.contains(entry.id)
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 8.dp)
-                                .clickable {
-                                    selectedIds.value = if (isSelected) selectedIds.value - entry.id else selectedIds.value + entry.id
-                                }
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = 24.dp, start = 16.dp, end = 16.dp),
+                verticalArrangement = Arrangement.Top,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                    // Top bar with Back button at left, title centered, delete at right
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Button(
+                            onClick = onBack,
+                            modifier = Modifier.height(36.dp)
                         ) {
-                            Checkbox(
-                                checked = isSelected,
-                                onCheckedChange = { checked ->
-                                    selectedIds.value = if (checked) selectedIds.value + entry.id else selectedIds.value - entry.id
-                                }
-                            )
-                            val uri = Uri.parse(entry.uri)
-                            val context = LocalContext.current
-                            val bitmap = remember(uri) {
-                                try {
-                                    loadBitmapWithCorrectOrientation(context, uri)
-                                } catch (e: SecurityException) {
-                                    null
-                                } catch (e: Exception) {
-                                    null
-                                }
+                            Text("Back")
+                        }
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Text(
+                            "Scans Gallery",
+                            style = MaterialTheme.typography.titleLarge,
+                            modifier = Modifier.weight(1f)
+                        )
+                        // Delete duplicates button (always visible)
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            IconButton(onClick = { showDeleteDuplicatesDialog.value = true }) {
+                                Icon(Icons.Default.Delete, contentDescription = "Remove Duplicates")
                             }
-                            Box(
-                                modifier = Modifier
-                                    .size(64.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(Color.LightGray),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                if (bitmap != null) {
-                                    Image(
-                                        bitmap = bitmap.asImageBitmap(),
-                                        contentDescription = "Scan thumbnail",
-                                        modifier = Modifier.matchParentSize(),
-                                        contentScale = ContentScale.Crop
+                            Text("Duplicates", style = MaterialTheme.typography.labelSmall)
+                        }
+                        // Delete selected button (only if selection)
+                        if (selectedIds.value.isNotEmpty()) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                IconButton(onClick = { showDeleteDialog.value = true }) {
+                                    Icon(Icons.Default.Delete, contentDescription = "Delete Selected")
+                                }
+                                Text("Selected", style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
+                    if (scanList.isEmpty()) {
+                        Text("No scans yet.")
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .navigationBarsPadding()
+                        ) {
+                            items(scanList) { entry ->
+                                val isSelected = selectedIds.value.contains(entry.id)
+                                val uri = Uri.parse(entry.uri)
+                                val context = LocalContext.current
+                                val bitmap = remember(uri) {
+                                    try {
+                                        loadBitmapWithCorrectOrientation(context, uri)
+                                    } catch (e: SecurityException) {
+                                        null
+                                    } catch (e: Exception) {
+                                        null
+                                    }
+                                }
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 8.dp)
+                                ) {
+                                    Checkbox(
+                                        checked = isSelected,
+                                        onCheckedChange = { checked ->
+                                            selectedIds.value = if (checked) selectedIds.value + entry.id else selectedIds.value - entry.id
+                                        }
                                     )
-                                } else {
-                                    Text("?", color = Color.Red)
-                                }
-                            }
-                            Spacer(modifier = Modifier.width(16.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Uploaded: ${entry.uploadDate}", style = MaterialTheme.typography.bodySmall)
-                                if (entry.uri in duplicates) {
-                                    Text("duplicated", color = Color.Red, style = MaterialTheme.typography.bodySmall)
+                                    Box(
+                                        modifier = Modifier
+                                            .size(64.dp)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(Color.LightGray)
+                                            .clickable { if (bitmap != null) viewingScan.value = entry },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        if (bitmap != null) {
+                                            Image(
+                                                bitmap = bitmap.asImageBitmap(),
+                                                contentDescription = "Scan thumbnail",
+                                                modifier = Modifier.matchParentSize(),
+                                                contentScale = ContentScale.Crop
+                                            )
+                                        } else {
+                                            Text("?", color = Color.Red)
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.width(16.dp))
+                                    Column(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clickable { if (bitmap != null) viewingScan.value = entry }
+                                    ) {
+                                        Text("Uploaded: ${entry.uploadDate}", style = MaterialTheme.typography.bodySmall)
+                                        if (entry.uri in duplicates) {
+                                            Text("duplicated", color = Color.Red, style = MaterialTheme.typography.bodySmall)
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
                 }
+            if (showDeleteDialog.value) {
+                AlertDialog(
+                    onDismissRequest = { showDeleteDialog.value = false },
+                    title = { Text("Delete selected scans?") },
+                    text = { Text("Are you sure you want to delete the selected scans? This cannot be undone.") },
+                    confirmButton = {
+                        Button(onClick = {
+                            viewModel.deleteScansByIds(selectedIds.value.toList())
+                            selectedIds.value = emptySet()
+                            showDeleteDialog.value = false
+                        }) {
+                            Text("Delete")
+                        }
+                    },
+                    dismissButton = {
+                        Button(onClick = { showDeleteDialog.value = false }) {
+                            Text("Cancel")
+                        }
+                    }
+                )
+            }
+            if (showDeleteDuplicatesDialog.value) {
+                AlertDialog(
+                    onDismissRequest = { showDeleteDuplicatesDialog.value = false },
+                    title = { Text("Delete all duplicates?") },
+                    text = { Text("Are you sure you want to delete all duplicate scans? Only one copy of each will be kept. This cannot be undone.") },
+                    confirmButton = {
+                        Button(onClick = {
+                            // Find all duplicate IDs except one per hash
+                            val idsToDelete = scanList
+                                .groupBy { it.hash }
+                                .filter { it.value.size > 1 }
+                                .flatMap { (_, group) -> group.drop(1).map { it.id } }
+                            viewModel.deleteScansByIds(idsToDelete)
+                            showDeleteDuplicatesDialog.value = false
+                        }) {
+                            Text("Delete Duplicates")
+                        }
+                    },
+                    dismissButton = {
+                        Button(onClick = { showDeleteDuplicatesDialog.value = false }) {
+                            Text("Cancel")
+                        }
+                    }
+                )
+            }
+            // Full screen viewer
+            viewingScan.value?.let { scan ->
+                FullScreenImageViewer(
+                    scan = scan,
+                    onClose = { viewingScan.value = null }
+                )
             }
         }
-        if (showDeleteDialog.value) {
-            AlertDialog(
-                onDismissRequest = { showDeleteDialog.value = false },
-                title = { Text("Delete selected scans?") },
-                text = { Text("Are you sure you want to delete the selected scans? This cannot be undone.") },
-                confirmButton = {
-                    Button(onClick = {
-                        viewModel.deleteScansByIds(selectedIds.value.toList())
-                        selectedIds.value = emptySet()
-                        showDeleteDialog.value = false
-                    }) {
-                        Text("Delete")
-                    }
-                },
-                dismissButton = {
-                    Button(onClick = { showDeleteDialog.value = false }) {
-                        Text("Cancel")
-                    }
-                }
-            )
+    }
+}
+
+@Composable
+fun FullScreenImageViewer(scan: ScanEntity, onClose: () -> Unit) {
+    val context = LocalContext.current
+    val uri = remember(scan.uri) { Uri.parse(scan.uri) }
+    val bitmap = remember(uri) {
+        try {
+            loadBitmapWithCorrectOrientation(context, uri)
+        } catch (e: Exception) {
+            null
         }
     }
+    var scale by remember { mutableStateOf(1f) }
+    var offsetX by remember { mutableStateOf(0f) }
+    var offsetY by remember { mutableStateOf(0f) }
+    val state = rememberTransformableState { zoomChange, panChange, _ ->
+        scale = (scale * zoomChange).coerceIn(1f, 5f)
+        offsetX += panChange.x
+        offsetY += panChange.y
+    }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onClose,
+        confirmButton = {},
+        dismissButton = {
+            Button(onClick = onClose) { Text("Close") }
+        },
+        text = {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.85f)
+                    .fillMaxWidth(0.98f)
+                    .aspectRatio(0.75f) // More vertical space for documents
+                    .background(Color.Black)
+                    .transformable(state)
+            ) {
+                if (bitmap != null) {
+                    Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = "Full scan",
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer(
+                                scaleX = scale,
+                                scaleY = scale,
+                                translationX = offsetX,
+                                translationY = offsetY
+                            ),
+                        contentScale = ContentScale.Fit
+                    )
+                } else {
+                    Text("Could not load image", color = Color.White)
+                }
+            }
+        }
+    )
 }
 
 // Helper to use ML Kit Task with coroutines

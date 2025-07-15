@@ -69,6 +69,9 @@ import android.content.Intent
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.foundation.clickable
@@ -84,6 +87,221 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.material.icons.filled.Collections
 import androidx.compose.foundation.layout.navigationBarsPadding
+import com.example.inv2.repository.MonthlySummary
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+
+data class DataScannedScreenState(
+    val selectedMonth: String? = null
+)
+
+@Composable
+fun DataScannedScreen(
+    viewModel: ScanViewModel,
+    onBack: () -> Unit
+) {
+    val summaryList = viewModel.monthlySummary.collectAsState().value
+    var state by remember { mutableStateOf(DataScannedScreenState()) }
+    val invoices = viewModel.filteredInvoices.collectAsState().value
+    val supplierMapping = viewModel.supplierMapping.collectAsState().value
+    var showMappingDialog by remember { mutableStateOf(false) }
+    var mappingInvoice by remember { mutableStateOf<InvoiceEntity?>(null) }
+    var canonicalName by remember { mutableStateOf("") }
+    var regNumber by remember { mutableStateOf("") }
+    var vatNumber by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
+    var debugExpanded by remember { mutableStateOf(true) }
+
+    fun openMappingDialog(invoice: InvoiceEntity) {
+        mappingInvoice = invoice
+        canonicalName = invoice.supplierName
+        regNumber = invoice.companyRegNumber
+        vatNumber = invoice.companyVatNumber
+        showMappingDialog = true
+    }
+
+    Column(
+        modifier = Modifier.fillMaxSize().padding(24.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Button(onClick = onBack) { Text("Back") }
+            Spacer(modifier = Modifier.width(16.dp))
+            Text("Data scanned", style = MaterialTheme.typography.titleLarge)
+        }
+        Spacer(modifier = Modifier.height(16.dp))
+        if (state.selectedMonth == null) {
+            // Summary list
+            if (summaryList.isEmpty()) {
+                Text("No data yet.")
+            } else {
+                LazyColumn {
+                    items(summaryList) { summary ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    state = state.copy(selectedMonth = summary.month)
+                                    viewModel.filterInvoicesByMonth(summary.month)
+                                }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(summary.month, modifier = Modifier.weight(1f))
+                            Text("VAT: %.2f".format(summary.vatSum), modifier = Modifier.weight(1f))
+                            Text("Total: ${summary.totalInvoices}", modifier = Modifier.weight(1f))
+                            Text("Success: ${summary.successCount}", modifier = Modifier.weight(1f))
+                            Text("Needs mapping: ${summary.needsMappingCount}", modifier = Modifier.weight(1f))
+                        }
+                    }
+                }
+            }
+        } else {
+            // Details for selected month
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Button(onClick = {
+                    state = state.copy(selectedMonth = null)
+                }) { Text("Back to months") }
+                Spacer(modifier = Modifier.width(16.dp))
+                Text("Invoices for ${state.selectedMonth}", style = MaterialTheme.typography.titleLarge)
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+            if (invoices.isEmpty()) {
+                Text("No invoices for this month.")
+            } else {
+                LazyColumn {
+                    items(invoices) { invoice ->
+                        var isMapped by remember { mutableStateOf<Boolean?>(null) }
+                        LaunchedEffect(invoice.supplierName) {
+                            val mapping = viewModel.getSupplierMapping(invoice.supplierName)
+                            isMapped = mapping != null
+                        }
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp)
+                                .border(1.dp, Color.LightGray, RoundedCornerShape(8.dp))
+                                .padding(8.dp)
+                        ) {
+                            Text("Date: ${invoice.date}")
+                            Text("Invoice #: ${invoice.invoiceNumber}")
+                            Text("Supplier: ${invoice.supplierName}")
+                            Text("Amount (no VAT): ${invoice.amountNoVat}")
+                            Text("VAT: ${invoice.vatAmount}")
+                            Text("Reg #: ${invoice.companyRegNumber}")
+                            Text("VAT #: ${invoice.companyVatNumber}")
+                            Text("VAT %: ${invoice.vatPercent}")
+                            if (isMapped == false) {
+                                Button(onClick = { openMappingDialog(invoice) }) {
+                                    Text("Map Supplier")
+                                }
+                            } else if (isMapped == true) {
+                                Text("Supplier mapped", color = Color(0xFF388E3C))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    val allInvoices = viewModel.allInvoices.collectAsState().value
+    LaunchedEffect(Unit) {
+        viewModel.refreshAllInvoices()
+    }
+    // Place debug section at the bottom, above navigation bar
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF222222))
+                .padding(8.dp)
+                .padding(bottom = 48.dp) // Add bottom padding to avoid nav bar
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("[DEBUG] All invoices in DB:", color = Color.Yellow)
+                Spacer(modifier = Modifier.width(8.dp))
+                if (debugExpanded) {
+                    Text("▼", color = Color.Red, modifier = Modifier.clickable { debugExpanded = false })
+                } else {
+                    Text("▲", color = Color.Red, modifier = Modifier.clickable { debugExpanded = true })
+                }
+            }
+            if (debugExpanded) {
+                if (allInvoices.isEmpty()) {
+                    Text("No invoices in DB.", color = Color.Yellow)
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.heightIn(max = 200.dp)
+                    ) {
+                        items(allInvoices) { invoice ->
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp)
+                                    .border(1.dp, Color.Yellow, RoundedCornerShape(8.dp))
+                                    .padding(8.dp)
+                            ) {
+                                Text("Date: ${invoice.date}", color = Color.Yellow)
+                                Text("Invoice #: ${invoice.invoiceNumber}", color = Color.Yellow)
+                                Text("Supplier: ${invoice.supplierName}", color = Color.Yellow)
+                                Text("Amount (no VAT): ${invoice.amountNoVat}", color = Color.Yellow)
+                                Text("VAT: ${invoice.vatAmount}", color = Color.Yellow)
+                                Text("Reg #: ${invoice.companyRegNumber}", color = Color.Yellow)
+                                Text("VAT #: ${invoice.companyVatNumber}", color = Color.Yellow)
+                                Text("VAT %: ${invoice.vatPercent}", color = Color.Yellow)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if (showMappingDialog && mappingInvoice != null) {
+        AlertDialog(
+            onDismissRequest = { showMappingDialog = false },
+            title = { Text("Map Supplier") },
+            text = {
+                Column {
+                    Text("Scanned: ${mappingInvoice!!.supplierName}")
+                    OutlinedTextField(
+                        value = canonicalName,
+                        onValueChange = { canonicalName = it },
+                        label = { Text("Canonical Supplier Name") }
+                    )
+                    OutlinedTextField(
+                        value = regNumber,
+                        onValueChange = { regNumber = it },
+                        label = { Text("Company Reg Number") }
+                    )
+                    OutlinedTextField(
+                        value = vatNumber,
+                        onValueChange = { vatNumber = it },
+                        label = { Text("Company VAT Number") }
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    mappingInvoice?.let { invoice ->
+                        viewModel.addSupplierMapping(
+                            com.example.inv2.model.SupplierMappingEntity(
+                                scannedSupplierName = invoice.supplierName,
+                                canonicalSupplierName = canonicalName,
+                                companyRegNumber = regNumber,
+                                companyVatNumber = vatNumber
+                            )
+                        )
+                        showMappingDialog = false
+                    }
+                }) { Text("Save") }
+            },
+            dismissButton = {
+                Button(onClick = { showMappingDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -170,10 +388,13 @@ fun MainScreen() {
     val scanList = viewModel.scans.collectAsState().value
     val isLoading = viewModel.isLoading.collectAsState().value
     val showGallery = remember { mutableStateOf(false) }
+    val showDataScanned = remember { mutableStateOf(false) }
     val isUploading = remember { mutableStateOf(false) }
     val uploadProgress = remember { mutableStateOf(0) }
     val uploadTotal = remember { mutableStateOf(0) }
     val pendingUris = remember { mutableStateOf<List<Uri>>(emptyList()) }
+    val showPhotoPicker = remember { mutableStateOf(false) }
+    val selectedUris = remember { mutableStateOf<List<Uri>>(emptyList()) }
 
     // Automatically upload pending scans on app start
     LaunchedEffect(Unit) {
@@ -234,12 +455,27 @@ fun MainScreen() {
 
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris: List<Uri> ->
         if (uris.isNotEmpty()) {
-            pendingUris.value = uris
+            selectedUris.value = uris
+            showPhotoPicker.value = true
         }
     }
 
-    if (showGallery.value) {
+    if (showPhotoPicker.value && selectedUris.value.isNotEmpty()) {
+        PhotoPickerScreen(
+            onBack = {
+                showPhotoPicker.value = false
+                selectedUris.value = emptyList()
+                // After OCR, start upload if needed
+                // pendingUris.value = ... (if you want to upload after OCR)
+            },
+            onScanAdded = { scan -> viewModel.addScan(scan) },
+            viewModel = viewModel,
+            uris = selectedUris.value
+        )
+    } else if (showGallery.value) {
         ScansGalleryScreen(scanList = scanList, isLoading = isLoading, onBack = { showGallery.value = false })
+    } else if (showDataScanned.value) {
+        DataScannedScreen(viewModel = viewModel, onBack = { showDataScanned.value = false })
     } else {
         Column(
             modifier = Modifier
@@ -266,6 +502,16 @@ fun MainScreen() {
             ) {
                 Text("Scans")
             }
+            Spacer(modifier = Modifier.height(16.dp))
+            Button(
+                onClick = { 
+                    viewModel.refreshMonthlySummary()
+                    showDataScanned.value = true 
+                },
+                enabled = !isUploading.value
+            ) {
+                Text("Data scanned")
+            }
         }
     }
 }
@@ -280,30 +526,30 @@ fun bitmapHash(bitmap: Bitmap): String {
     return digest.joinToString("") { "%02x".format(it) }
 }
 
-// Updated PhotoPickerScreen to accept onBack and onScanAdded
+// Updated PhotoPickerScreen to accept uris: List<Uri>
 @Composable
-fun PhotoPickerScreen(onBack: () -> Unit, onScanAdded: (ScanEntity) -> Unit) {
+fun PhotoPickerScreen(onBack: () -> Unit, onScanAdded: (ScanEntity) -> Unit, viewModel: ScanViewModel, uris: List<Uri>) {
     val context = LocalContext.current
     val imageUris = remember { mutableStateOf<List<Uri>>(emptyList()) }
     val ocrResults = remember { mutableStateOf<Map<Uri, String>>(emptyMap()) }
     val saveStatus = remember { mutableStateOf<Map<Uri, String>>(emptyMap()) }
-    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris: List<Uri> ->
-        uris.forEach { uri ->
-            // Persist URI permission for later access
+    // Set imageUris.value = uris on first composition
+    LaunchedEffect(uris) {
+        if (uris.isNotEmpty()) imageUris.value = uris
+    }
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { newUris: List<Uri> ->
+        newUris.forEach { uri ->
             try {
                 context.contentResolver.takePersistableUriPermission(
                     uri,
                     Intent.FLAG_GRANT_READ_URI_PERMISSION
                 )
             } catch (e: SecurityException) {
-                // Ignore if already granted or not needed
             } catch (e: Exception) {
-                // Log or handle other exceptions if needed
             }
         }
-        imageUris.value = uris
+        imageUris.value = newUris
     }
-    val db = remember { InvoiceDatabase.getInstance(context) }
 
     // OCR: Run text recognition when imageUris changes
     LaunchedEffect(imageUris.value) {
@@ -323,23 +569,21 @@ fun PhotoPickerScreen(onBack: () -> Unit, onScanAdded: (ScanEntity) -> Unit) {
                 val result = recognizer.process(image).await()
                 results[uri] = result.text
                 val (fields, missing) = extractInvoiceFields(result.text)
+                val entity = InvoiceEntity(
+                    date = fields["date"] ?: "",
+                    invoiceNumber = fields["invoice_number"] ?: "",
+                    supplierName = fields["supplier_name"] ?: "",
+                    amountNoVat = fields["amount_no_vat"] ?: "",
+                    vatAmount = fields["vat_amount"] ?: "",
+                    companyRegNumber = fields["company_reg_number"] ?: "",
+                    companyVatNumber = fields["company_vat_number"] ?: "",
+                    vatPercent = fields["vat_percent"] ?: ""
+                )
+                viewModel.saveInvoice(entity)
                 if (missing.isEmpty()) {
-                    val entity = InvoiceEntity(
-                        date = fields["date"] ?: "",
-                        invoiceNumber = fields["invoice_number"] ?: "",
-                        supplierName = fields["supplier_name"] ?: "",
-                        amountNoVat = fields["amount_no_vat"] ?: "",
-                        vatAmount = fields["vat_amount"] ?: "",
-                        companyRegNumber = fields["company_reg_number"] ?: "",
-                        companyVatNumber = fields["company_vat_number"] ?: "",
-                        vatPercent = fields["vat_percent"] ?: ""
-                    )
-                    kotlinx.coroutines.GlobalScope.launch {
-                        db.invoiceDao().insert(entity)
-                    }
                     status[uri] = "Saved!"
                 } else {
-                    status[uri] = "Missing fields, not saved"
+                    status[uri] = "Saved (incomplete): missing ${missing.joinToString()}"
                 }
                 // Add scan entry for gallery
                 val hash = bitmapHash(bitmap)
